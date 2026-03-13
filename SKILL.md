@@ -15,12 +15,38 @@ Show which specialists have recent engagement updates and which need to provide 
 - The underlying view `SALES_DEV.PUBLIC.Specialist_Engagement_Status` joins SE hierarchy, specialist metadata, SFDC deliverable history (specialist comments), and Vivun activity data. The materialized table pre-computes this for fast queries.
 - **IMPORTANT:** Always query the `_MAT` table, not the view, to avoid slow execution.
 
-### Columns
+## Connection
+
+- **Connection:** Coco2
+- **Read role:** SALES_ENGINEER
+- **Write role:** SALES_DEV_RW_RL (for table/task management only)
+
+### Output Columns (always shown)
 
 | Column | Type | Description |
 |--------|------|-------------|
 | `PREFERRED_NAME` | VARCHAR | Specialist's preferred name |
 | `MANAGER_NAME` | VARCHAR | Specialist's manager |
+| `SPECIALIST_GROUP` | VARCHAR | Specialist group (e.g., AFE - AI/ML, AFE - DE, Architect, etc.) |
+| `LAST_UPDATE` | VARCHAR | Date of most recent comment or activity (YYYY-MM-DD) |
+| `DAYS_UNTIL_UPDATE_NEEDED` | NUMBER | Days remaining before update is needed (can be negative = overdue) |
+| `UPDATE_NEEDED_STATUS` | VARCHAR | **"Recent"** (>4 days left), **"Needed Soon"** (1–4 days left), **"Needed Now"** (≤0 days left) |
+
+### Detail Columns (shown only if user asks for detail)
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `SPECIALIST_COMMENTS_14D` | NUMBER | Count of specialist comment updates in last 14 days |
+| `SPECIALIST_COMMENTS_7D` | NUMBER | Count of specialist comment updates in last 7 days |
+| `ACTIVITIES_14D` | NUMBER | Count of Vivun activities in last 14 days |
+| `ACTIVITIES_7D` | NUMBER | Count of Vivun activities in last 7 days |
+| `ACTIVE_STATUS` | BOOLEAN | TRUE if any comments or activities in last 14 days |
+| `ACTIVE_REASON` | VARCHAR | Why active: "Activity and Comments", "Specialist Comments", "Activity Data", or "No Update" |
+
+### Internal Columns (never shown unless specifically asked)
+
+| Column | Type | Description |
+|--------|------|-------------|
 | `IS_PEOPLE_MANAGER` | BOOLEAN | Whether this person is a people manager |
 | `ORIGINAL_HIRE_DATE` | DATE | Hire date |
 | `TENURE` | NUMBER | Tenure in days |
@@ -28,16 +54,6 @@ Show which specialists have recent engagement updates and which need to provide 
 | `HIERARCHY_4` | VARCHAR | Org hierarchy level 4 (e.g., Director) |
 | `HIERARCHY_5` | VARCHAR | Org hierarchy level 5 (e.g., Manager) |
 | `SFDC_ID` | VARCHAR | Salesforce user ID |
-| `SPECIALIST_GROUP` | VARCHAR | Specialist group (e.g., AFE - AI/ML, AFE - DE, Architect, etc.) |
-| `SPECIALIST_COMMENTS_14D` | NUMBER | Count of specialist comment updates in last 14 days |
-| `SPECIALIST_COMMENTS_7D` | NUMBER | Count of specialist comment updates in last 7 days |
-| `ACTIVITIES_14D` | NUMBER | Count of Vivun activities in last 14 days |
-| `ACTIVITIES_7D` | NUMBER | Count of Vivun activities in last 7 days |
-| `ACTIVE_STATUS` | BOOLEAN | TRUE if any comments or activities in last 14 days |
-| `ACTIVE_REASON` | VARCHAR | Why active: "Activity and Comments", "Specialist Comments", "Activity Data", or "No Update" |
-| `LAST_UPDATE` | VARCHAR | Date of most recent comment or activity (YYYY-MM-DD) |
-| `DAYS_UNTIL_UPDATE_NEEDED` | NUMBER | Days remaining before update is needed (can be negative = overdue) |
-| `UPDATE_NEEDED_STATUS` | VARCHAR | **"Recent"** (>4 days left), **"Needed Soon"** (1–4 days left), **"Needed Now"** (≤0 days left) |
 
 ### Update Needed Status Logic
 
@@ -49,9 +65,32 @@ The status is derived from the most recent date across specialist comments and V
 | **Needed Soon** | 1–4 days until update needed | Getting stale — plan to update soon |
 | **Needed Now** | 0 or fewer days remaining (overdue) | Overdue — update immediately |
 
+## Excluded Specialists
+
+The following specialists are excluded from all queries (data issues, inactive, etc.):
+- Ajita Sharma
+
+When querying, apply: `AND PREFERRED_NAME NOT IN ('Ajita Sharma')`
+To add/remove exclusions, update this list and the corresponding `NOT IN` clause in Step 3.
+
 ## Workflow
 
-### Step 1: Select Filter
+### Step 0: Infer Filters from User Message
+
+**Before prompting, parse the user's message for implicit filters.** If the intent is clear, skip Steps 1–2 and go directly to Step 3.
+
+| User phrase | Inferred filter |
+|-------------|-----------------|
+| "who needs updates", "overdue", "stale", "need to update" | Needed Now + Needed Soon |
+| "who's current", "who's good", "recent updates" | Recent |
+| "how many need updates", "count overdue" | Needed Now + Needed Soon (count only) |
+| Mentions a manager name (e.g., "on Zaki's team") | Apply `MANAGER_NAME` filter |
+| Mentions a group (e.g., "AFE specialists", "architects") | Apply `SPECIALIST_GROUP` filter |
+| Generic: "specialist engagement status", "show me the status" | Proceed to Steps 1–2 |
+
+**Only proceed to Steps 1–2 if the user's request is ambiguous or generic.**
+
+### Step 1: Select Filter (only if Step 0 could not determine)
 
 Ask the user which update status to filter by. Use a single AskUserQuestion call:
 
@@ -61,7 +100,7 @@ Ask the user which update status to filter by. Use a single AskUserQuestion call
    - Needed Soon
    - Needed Now
 
-### Step 2: Optional Scope Filters
+### Step 2: Optional Scope Filters (only if Step 0 could not determine)
 
 Ask the user if they want to narrow by scope. Use a single AskUserQuestion call:
 
@@ -86,7 +125,7 @@ Use the following verified base query, applying the selected filters as WHERE cl
 ```sql
 SELECT * FROM SALES_DEV.PUBLIC.Specialist_Engagement_Status_MAT
 WHERE IS_PEOPLE_MANAGER = FALSE
-  AND PREFERRED_NAME != 'Ajita Sharma'
+  AND PREFERRED_NAME NOT IN ('Ajita Sharma')
   -- Status filter (omit if "All"):
   -- AND UPDATE_NEEDED_STATUS = '<status>'
   -- Specialist group filter (omit if "All"):
@@ -111,15 +150,23 @@ ORDER BY
 SELECT * FROM SALES_DEV.PUBLIC.Specialist_Engagement_Status_MAT
 WHERE UPDATE_NEEDED_STATUS = 'Needed Now'
   AND MANAGER_NAME = 'Zaki Bajwa'
-  AND IS_PEOPLE_MANAGER = FALSE;
+  AND IS_PEOPLE_MANAGER = FALSE
+  AND PREFERRED_NAME NOT IN ('Ajita Sharma');
 ```
 
 ### Step 4: Render Terminal Output
 
-**First**, show a summary line:
+**First**, show a summary line with counts only for the statuses included in the current filter:
 
 ```
-Found X specialists — Z Needed Now, W Needed Soon, V Recent
+# If filtering Needed Now + Needed Soon:
+Found X specialists — Y Needed Now, Z Needed Soon
+
+# If filtering all statuses:
+Found X specialists — Y Needed Now, Z Needed Soon, W Recent
+
+# If filtering a single status:
+Found X specialists — all Needed Now
 ```
 
 **Then**, output a single markdown table with all specialists:
@@ -149,7 +196,23 @@ Would you like to:
 4. Done
 ```
 
-If the user picks **"Group by manager"**, re-query and display grouped:
+If the user picks **"Group by manager"**, re-query using:
+
+```sql
+SELECT * FROM SALES_DEV.PUBLIC.Specialist_Engagement_Status_MAT
+WHERE IS_PEOPLE_MANAGER = FALSE
+  AND PREFERRED_NAME NOT IN ('Ajita Sharma')
+  -- Apply same status/group filters as the original query
+ORDER BY MANAGER_NAME,
+    CASE UPDATE_NEEDED_STATUS
+        WHEN 'Needed Now' THEN 1
+        WHEN 'Needed Soon' THEN 2
+        WHEN 'Recent' THEN 3
+    END,
+    DAYS_UNTIL_UPDATE_NEEDED ASC
+```
+
+Then display grouped:
 
 ```
 ### Manager Name — X reports (Y need updates)
