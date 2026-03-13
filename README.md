@@ -1,38 +1,46 @@
 # Specialist Engagement Status
 
-A [Cortex Code](https://docs.snowflake.com/en/user-guide/cortex-code/cortex-code) skill that shows which specialists have recent engagement updates and which are overdue, based on use case modification dates in Snowflake. Designed for SE managers and ops leads who need to ensure specialists are actively updating their engagements.
+A [Cortex Code](https://docs.snowflake.com/en/user-guide/cortex-code/cortex-code) skill that shows which specialists have recent engagement updates and which are overdue, based on their last specialist comment or Vivun activity date. Designed for SE managers and ops leads who need to ensure specialists are actively updating their engagements.
 
 ## What It Does
 
 When triggered, the skill:
 
 1. Prompts for an update status filter: **Recent**, **Needed Soon**, **Needed Now**, or All
-2. Optionally narrows by theater and minimum EACV
-3. Queries `MDM.MDM_INTERFACES.DIM_USE_CASE`, flattening the use case team arrays to extract specialists
-4. Classifies each engagement by staleness and outputs a terminal markdown table grouped by specialist
+2. Optionally narrows by specialist group, manager, or hierarchy
+3. Queries the `SALES_DEV.PUBLIC.Specialist_Engagement_Status` view
+4. Outputs a terminal markdown table sorted by urgency (Needed Now first)
 
 ## Update Status Classification
 
 | Status | Condition | Meaning |
 |--------|-----------|---------|
-| **Recent** | Updated within last 7 days | No action needed |
-| **Needed Soon** | 8–21 days since last update | Plan to update |
-| **Needed Now** | 21+ days since last update | Update immediately |
+| **Recent** | >4 days until update needed | Recently active — no action needed |
+| **Needed Soon** | 1–4 days until update needed | Getting stale — plan to update |
+| **Needed Now** | ≤0 days remaining (overdue) | Update immediately |
+
+## Data Source
+
+**View:** `SALES_DEV.PUBLIC.Specialist_Engagement_Status`
+
+This view joins:
+- `SALES.SE_REPORTING.SE_HIERARCHY` — specialist names, managers, org hierarchy
+- `SIGMA_WRITEBACK.SALES.DIM_SE_SPECIALIST_METADATA` — specialist group
+- `FIVETRAN.SALESFORCE.VH_DELIVERABLE_HISTORY` — specialist comment timestamps
+- `SALES.SE_REPORTING.DIM_SE_ACTIVITY` — Vivun activity timestamps
 
 ## Install
 
 ### Prerequisites
 
 - [Cortex Code CLI](https://docs.snowflake.com/en/user-guide/cortex-code/cortex-code) installed and authenticated
-- A Snowflake connection with read access to `MDM.MDM_INTERFACES.DIM_USE_CASE`
+- A Snowflake connection with read access to `SALES_DEV.PUBLIC.Specialist_Engagement_Status`
 
 ### Setup
 
 ```bash
-# Create the skills directory if it doesn't exist
 mkdir -p ~/.cortex/skills
 
-# Clone
 git clone https://github.com/sfc-gh-michael-lemke/specialist-engagement-status.git \
   ~/.cortex/skills/specialist-engagement-status
 ```
@@ -54,28 +62,8 @@ show me stale specialist engagements
 ```
 
 ```
-specialist update needed for USMajors
+specialist update needed — Needed Now only
 ```
-
-```
-engagement status for deals over $1M
-```
-
-## Data Source
-
-| Field | Column | Type |
-|-------|--------|------|
-| Specialist names | `USE_CASE_TEAM_NAME_LIST` | ARRAY |
-| Specialist roles | `USE_CASE_TEAM_ROLE_LIST` | ARRAY |
-| Last update | `LAST_MODIFIED_DATE` | DATE |
-| EACV | `USE_CASE_EACV` | FLOAT |
-| Stage | `USE_CASE_STAGE` | VARCHAR |
-| Theater | `THEATER_NAME` | VARCHAR |
-| Comments | `SPECIALIST_COMMENTS` | VARCHAR |
-
-### Specialist Roles Included
-
-SE - Workload FCTO, SE - Enterprise Architect, SE - Security FCTO, SE - Performance FCTO, SE - Solution Innovation Team, SE - Industry CTO, SE - Partner, SE - Activation, SE - Champion, FCTO - Industry Architect, FCTO - Platform Architect, FCTO - Security Architect, Industry Principal, Platform Specialist, Data Cloud Product Principal.
 
 ## File Structure
 

@@ -1,53 +1,52 @@
 ---
 name: specialist-engagement-status
-description: "Show specialist engagement update status. Lists specialists with their use cases classified as Recent, Needed Now, or Needed Soon based on how stale the engagement is. Use when: specialist engagement status, who needs updates, specialist update needed, engagement staleness, stale engagements, which specialists need to update. Triggers: specialist engagement status, engagement status, who needs updates, specialist update needed, stale engagements, update status."
+description: "Show specialist engagement update status. Lists specialists classified as Recent, Needed Now, or Needed Soon based on their last comment or activity date. Use when: specialist engagement status, who needs updates, specialist update needed, engagement staleness, stale engagements, which specialists need to update. Triggers: specialist engagement status, engagement status, who needs updates, specialist update needed, stale engagements, update status."
 ---
 
 # Specialist Engagement Status
 
 **Role:** Sales Operations Analyst
 
-Show which specialists have recent engagement updates and which need to provide updates, based on how recently their use cases were modified.
+Show which specialists have recent engagement updates and which need to provide updates, based on their last specialist comment or Vivun activity date.
 
 ## Data Source
 
-- **Table:** `MDM.MDM_INTERFACES.DIM_USE_CASE`
-- **Specialist names:** `USE_CASE_TEAM_NAME_LIST` (ARRAY) — flattened with parallel index into `USE_CASE_TEAM_ROLE_LIST`
-- **Specialist roles:** `USE_CASE_TEAM_ROLE_LIST` (ARRAY) — only include specialist roles (see filter below)
-- **Staleness proxy:** `LAST_MODIFIED_DATE` compared to `CURRENT_DATE`
-- **Value field:** `USE_CASE_EACV`
+- **View:** `SALES_DEV.PUBLIC.Specialist_Engagement_Status`
+- This view joins SE hierarchy, specialist metadata, SFDC deliverable history (specialist comments), and Vivun activity data to produce a per-specialist engagement status.
 
-### Specialist Roles Filter
+### Columns
 
-Only include team members whose role matches one of these specialist roles:
+| Column | Type | Description |
+|--------|------|-------------|
+| `PREFERRED_NAME` | VARCHAR | Specialist's preferred name |
+| `MANAGER_NAME` | VARCHAR | Specialist's manager |
+| `IS_PEOPLE_MANAGER` | BOOLEAN | Whether this person is a people manager |
+| `ORIGINAL_HIRE_DATE` | DATE | Hire date |
+| `TENURE` | NUMBER | Tenure in days |
+| `HIERARCHY_3` | VARCHAR | Org hierarchy level 3 (e.g., VP) |
+| `HIERARCHY_4` | VARCHAR | Org hierarchy level 4 (e.g., Director) |
+| `HIERARCHY_5` | VARCHAR | Org hierarchy level 5 (e.g., Manager) |
+| `SFDC_ID` | VARCHAR | Salesforce user ID |
+| `SPECIALIST_GROUP` | VARCHAR | Specialist group (e.g., AFE - AI/ML, AFE - DE, Architect, etc.) |
+| `SPECIALIST_COMMENTS_14D` | NUMBER | Count of specialist comment updates in last 14 days |
+| `SPECIALIST_COMMENTS_7D` | NUMBER | Count of specialist comment updates in last 7 days |
+| `ACTIVITIES_14D` | NUMBER | Count of Vivun activities in last 14 days |
+| `ACTIVITIES_7D` | NUMBER | Count of Vivun activities in last 7 days |
+| `ACTIVE_STATUS` | BOOLEAN | TRUE if any comments or activities in last 14 days |
+| `ACTIVE_REASON` | VARCHAR | Why active: "Activity and Comments", "Specialist Comments", "Activity Data", or "No Update" |
+| `LAST_UPDATE` | VARCHAR | Date of most recent comment or activity (YYYY-MM-DD) |
+| `DAYS_UNTIL_UPDATE_NEEDED` | NUMBER | Days remaining before update is needed (can be negative = overdue) |
+| `UPDATE_NEEDED_STATUS` | VARCHAR | **"Recent"** (>4 days left), **"Needed Soon"** (1–4 days left), **"Needed Now"** (≤0 days left) |
 
-```
-SE - Workload FCTO
-SE - Enterprise Architect
-SE - Security FCTO
-SE - Performance FCTO
-SE - Solution Innovation Team
-SE - Industry CTO
-SE - Partner
-SE - Activation
-SE - Champion
-FCTO - Industry Architect
-FCTO - Platform Architect
-FCTO - Security Architect
-Industry Principal
-Platform Specialist
-Data Cloud Product Principal
-```
+### Update Needed Status Logic
 
-Exclude non-specialist roles like "Solution Engineer", "Use Case Owner", "Account Hierarchy Visibility", "Secondary Account Executive", etc.
-
-## Update Needed Status Classification
+The status is derived from the most recent date across specialist comments and Vivun activities:
 
 | Status | Condition | Meaning |
 |--------|-----------|---------|
-| **Recent** | `LAST_MODIFIED_DATE` within last 7 days | Engagement was recently updated — no action needed |
-| **Needed Soon** | `LAST_MODIFIED_DATE` 8–21 days ago | Getting stale — specialist should plan to update |
-| **Needed Now** | `LAST_MODIFIED_DATE` more than 21 days ago | Overdue — specialist should update immediately |
+| **Recent** | More than 4 days until update needed | Recently active — no action needed |
+| **Needed Soon** | 1–4 days until update needed | Getting stale — plan to update soon |
+| **Needed Now** | 0 or fewer days remaining (overdue) | Overdue — update immediately |
 
 ## Workflow
 
@@ -57,96 +56,67 @@ Ask the user which update status to filter by. Use a single AskUserQuestion call
 
 1. **Update status filter** (single-select):
    - All (show everything)
-   - Recent (updated in last 7 days)
-   - Needed Soon (8–21 days stale)
-   - Needed Now (more than 21 days stale)
+   - Recent
+   - Needed Soon
+   - Needed Now
 
 ### Step 2: Optional Scope Filters
 
-Ask the user if they want to narrow by scope. Use a single AskUserQuestion call with up to 3 questions:
+Ask the user if they want to narrow by scope. Use a single AskUserQuestion call:
 
-1. **Theater** (single-select):
+1. **Specialist group** (single-select):
    - All
-   - AMSExpansion
-   - AMSAcquisition
-   - USMajors
-   - EMEA
-   - APJ
+   - AFE (all AFE groups)
+   - Architect
+   - Scale
+   - Innovation
 
-2. **Minimum EACV** (single-select):
-   - No minimum
-   - $100K+
-   - $500K+
-   - $1M+
+2. **Manager or hierarchy filter** (single-select):
+   - All
+   - Filter by manager name
+   - Filter by hierarchy level
 
-### Step 3: Query Specialist Engagements
+If the user selects "Filter by manager name" or "Filter by hierarchy level", ask a follow-up to get the specific value.
+
+### Step 3: Query
 
 Run the following query, applying the selected filters:
 
 ```sql
-WITH specialist_engagements AS (
-    SELECT
-        u.USE_CASE_ID,
-        u.USE_CASE_NUMBER,
-        u.USE_CASE_NAME,
-        u.ACCOUNT_NAME,
-        u.USE_CASE_EACV,
-        u.USE_CASE_STAGE,
-        u.THEATER_NAME,
-        u.REGION_NAME,
-        u.LAST_MODIFIED_DATE,
-        u.SPECIALIST_COMMENTS,
-        TRIM(name.value::VARCHAR, '"') AS SPECIALIST_NAME,
-        TRIM(role.value::VARCHAR, '"') AS SPECIALIST_ROLE,
-        DATEDIFF('day', u.LAST_MODIFIED_DATE, CURRENT_DATE) AS DAYS_SINCE_UPDATE,
-        CASE
-            WHEN DATEDIFF('day', u.LAST_MODIFIED_DATE, CURRENT_DATE) <= 7 THEN 'Recent'
-            WHEN DATEDIFF('day', u.LAST_MODIFIED_DATE, CURRENT_DATE) <= 21 THEN 'Needed Soon'
-            ELSE 'Needed Now'
-        END AS UPDATE_STATUS
-    FROM MDM.MDM_INTERFACES.DIM_USE_CASE u,
-         LATERAL FLATTEN(input => u.USE_CASE_TEAM_NAME_LIST) name,
-         LATERAL FLATTEN(input => u.USE_CASE_TEAM_ROLE_LIST) role
-    WHERE name.index = role.index
-      AND u.IS_DEPLOYED = FALSE
-      AND u.IS_LOST = FALSE
-      AND u.USE_CASE_EACV > 0
-      AND u.THEATER_NAME IS NOT NULL
-      AND u.THEATER_NAME NOT IN ('AcctsToDelete', '')
-      AND role.value::VARCHAR IN (
-          'SE - Workload FCTO',
-          'SE - Enterprise Architect',
-          'SE - Security FCTO',
-          'SE - Performance FCTO',
-          'SE - Solution Innovation Team',
-          'SE - Industry CTO',
-          'SE - Partner',
-          'SE - Activation',
-          'SE - Champion',
-          'FCTO - Industry Architect',
-          'FCTO - Platform Architect',
-          'FCTO - Security Architect',
-          'Industry Principal',
-          'Platform Specialist',
-          'Data Cloud Product Principal'
-      )
-      -- Theater filter (omit if "All"):
-      -- AND u.THEATER_NAME = '<theater>'
-      -- EACV filter (omit if "No minimum"):
-      -- AND u.USE_CASE_EACV >= <threshold>
-)
-SELECT *
-FROM specialist_engagements
--- Status filter (omit if "All"):
--- WHERE UPDATE_STATUS = '<status>'
+SELECT
+    PREFERRED_NAME,
+    MANAGER_NAME,
+    SPECIALIST_GROUP,
+    HIERARCHY_4,
+    HIERARCHY_5,
+    SPECIALIST_COMMENTS_7D,
+    SPECIALIST_COMMENTS_14D,
+    ACTIVITIES_7D,
+    ACTIVITIES_14D,
+    ACTIVE_STATUS,
+    ACTIVE_REASON,
+    LAST_UPDATE,
+    DAYS_UNTIL_UPDATE_NEEDED,
+    UPDATE_NEEDED_STATUS
+FROM SALES_DEV.PUBLIC.Specialist_Engagement_Status
+WHERE 1=1
+  -- Status filter (omit if "All"):
+  -- AND UPDATE_NEEDED_STATUS = '<status>'
+  -- Specialist group filter (omit if "All"):
+  -- AND SPECIALIST_GROUP = '<group>'
+  -- For "AFE (all)" use: AND SPECIALIST_GROUP LIKE 'AFE%'
+  -- Manager filter (omit if "All"):
+  -- AND MANAGER_NAME = '<manager>'
+  -- Hierarchy filter (omit if "All"):
+  -- AND (HIERARCHY_3 = '<value>' OR HIERARCHY_4 = '<value>' OR HIERARCHY_5 = '<value>')
 ORDER BY
-    CASE UPDATE_STATUS
+    CASE UPDATE_NEEDED_STATUS
         WHEN 'Needed Now' THEN 1
         WHEN 'Needed Soon' THEN 2
         WHEN 'Recent' THEN 3
     END,
-    SPECIALIST_NAME,
-    USE_CASE_EACV DESC NULLS LAST
+    DAYS_UNTIL_UPDATE_NEEDED ASC,
+    PREFERRED_NAME
 ```
 
 ### Step 4: Render Terminal Output
@@ -154,18 +124,17 @@ ORDER BY
 **First**, show a summary line:
 
 ```
-Found X specialist engagements (Y specialists) — Z Needed Now, W Needed Soon, V Recent
+Found X specialists — Z Needed Now, W Needed Soon, V Recent
 ```
 
-**Then**, output a markdown table grouped by specialist. For each specialist, show their engagements:
+**Then**, output a single markdown table with all specialists:
 
-```
-### Specialist Name (Role) — X engagements
-
-| Status | Account | Use Case | EACV | Stage | Days Since Update | Theater |
-|--------|---------|----------|------|-------|-------------------|---------|
-| Needed Now | Acme Corp | HD-012345: Migration | $1.2M | 3 - Technical Validation | 34 days | USMajors |
-| Needed Soon | Beta Inc | HD-067890: Analytics | $500K | 2 - Scoping | 15 days | EMEA |
+```markdown
+| Status | Name | Group | Manager | Last Update | Days Until Needed | Comments (7d/14d) | Activities (7d/14d) | Reason |
+|--------|------|-------|---------|-------------|-------------------|--------------------|--------------------|--------|
+| [!] Needed Now | Jane Doe | AFE - AI/ML | John Smith | 2026-02-15 | -19 | 0/0 | 0/0 | No Update |
+| [~] Needed Soon | Bob Lee | Architect | Jane Kim | 2026-03-10 | 3 | 1/2 | 0/1 | Specialist Comments |
+| [ok] Recent | Ali Hassan | AFE - DE | John Smith | 2026-03-12 | 6 | 2/4 | 3/5 | Activity and Comments |
 ```
 
 **Status formatting:**
@@ -173,33 +142,40 @@ Found X specialist engagements (Y specialists) — Z Needed Now, W Needed Soon, 
 - **Needed Soon** — prefix with `[~]`
 - **Recent** — prefix with `[ok]`
 
-**EACV formatting:** Use $K / $M format (e.g., $1.2M, $500K, $45K).
+**Days Until Needed:** Show negative values as overdue (e.g., "-19" means 19 days overdue).
 
 **After the table**, offer follow-up options:
 
 ```
 Would you like to:
 1. Filter by a different status
-2. See details for a specific specialist
+2. Group by manager to see team-level view
 3. Export as a list of names only
 4. Done
 ```
 
-If the user picks "See details for a specific specialist", show that specialist's full data including `SPECIALIST_COMMENTS` for each use case.
+If the user picks **"Group by manager"**, re-query and display grouped:
 
-If the user picks "Export as a list of names only", output a simple newline-separated list of specialist names matching the current filter.
+```
+### Manager Name — X reports (Y need updates)
+
+| Status | Name | Group | Last Update | Days Until Needed | Comments (7d/14d) | Activities (7d/14d) |
+|--------|------|-------|-------------|-------------------|--------------------|---------------------|
+...
+```
+
+If the user picks **"Export as a list of names only"**, output a simple newline-separated list of specialist names matching the current filter.
 
 ## Guardrails
 
 **DO:**
 - Always sort Needed Now first (most urgent at top)
-- Include EACV so users can prioritize high-value engagements
-- Show the specialist's role alongside their name
-- Deduplicate: if a specialist appears on multiple use cases, show all use cases under that specialist
+- Show activity counts so managers can see engagement volume
+- Include the ACTIVE_REASON to explain what type of activity was recorded
+- When grouping by manager, show a count of how many reports need updates
 
 **DO NOT:**
-- Include deployed use cases (IS_DEPLOYED = TRUE)
-- Include lost use cases (IS_LOST = FALSE)
-- Include non-specialist roles (Solution Engineer, Use Case Owner, etc.)
-- Include use cases with zero or null EACV
 - Generate HTML reports — this skill outputs to terminal only
+- Modify the underlying view or its data
+- Show SFDC_ID in the output (internal field)
+- Show IS_PEOPLE_MANAGER, ORIGINAL_HIRE_DATE, or TENURE unless specifically asked
