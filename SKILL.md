@@ -11,8 +11,9 @@ Show which specialists have recent engagement updates and which need to provide 
 
 ## Data Source
 
-- **View:** `SALES_DEV.PUBLIC.Specialist_Engagement_Status`
-- This view joins SE hierarchy, specialist metadata, SFDC deliverable history (specialist comments), and Vivun activity data to produce a per-specialist engagement status.
+- **Table:** `SALES_DEV.PUBLIC.Specialist_Engagement_Status_MAT` (materialized, refreshed every 30 min by task `SALES_DEV.PUBLIC.Refresh_Specialist_Engagement_Status`)
+- The underlying view `SALES_DEV.PUBLIC.Specialist_Engagement_Status` joins SE hierarchy, specialist metadata, SFDC deliverable history (specialist comments), and Vivun activity data. The materialized table pre-computes this for fast queries.
+- **IMPORTANT:** Always query the `_MAT` table, not the view, to avoid slow execution.
 
 ### Columns
 
@@ -80,26 +81,12 @@ If the user selects "Filter by manager name" or "Filter by hierarchy level", ask
 
 ### Step 3: Query
 
-Run the following query, applying the selected filters:
+Use the following verified base query, applying the selected filters as WHERE clauses:
 
 ```sql
-SELECT
-    PREFERRED_NAME,
-    MANAGER_NAME,
-    SPECIALIST_GROUP,
-    HIERARCHY_4,
-    HIERARCHY_5,
-    SPECIALIST_COMMENTS_7D,
-    SPECIALIST_COMMENTS_14D,
-    ACTIVITIES_7D,
-    ACTIVITIES_14D,
-    ACTIVE_STATUS,
-    ACTIVE_REASON,
-    LAST_UPDATE,
-    DAYS_UNTIL_UPDATE_NEEDED,
-    UPDATE_NEEDED_STATUS
-FROM SALES_DEV.PUBLIC.Specialist_Engagement_Status
-WHERE 1=1
+SELECT * FROM SALES_DEV.PUBLIC.Specialist_Engagement_Status_MAT
+WHERE IS_PEOPLE_MANAGER = FALSE
+  AND PREFERRED_NAME != 'Ajita Sharma'
   -- Status filter (omit if "All"):
   -- AND UPDATE_NEEDED_STATUS = '<status>'
   -- Specialist group filter (omit if "All"):
@@ -119,6 +106,14 @@ ORDER BY
     PREFERRED_NAME
 ```
 
+**Verified example query:**
+```sql
+SELECT * FROM SALES_DEV.PUBLIC.Specialist_Engagement_Status_MAT
+WHERE UPDATE_NEEDED_STATUS = 'Needed Now'
+  AND MANAGER_NAME = 'Zaki Bajwa'
+  AND IS_PEOPLE_MANAGER = FALSE;
+```
+
 ### Step 4: Render Terminal Output
 
 **First**, show a summary line:
@@ -130,11 +125,11 @@ Found X specialists — Z Needed Now, W Needed Soon, V Recent
 **Then**, output a single markdown table with all specialists:
 
 ```markdown
-| Status | Name | Group | Manager | Last Update | Days Until Needed | Comments (7d/14d) | Activities (7d/14d) | Reason |
-|--------|------|-------|---------|-------------|-------------------|--------------------|--------------------|--------|
-| [!] Needed Now | Jane Doe | AFE - AI/ML | John Smith | 2026-02-15 | -19 | 0/0 | 0/0 | No Update |
-| [~] Needed Soon | Bob Lee | Architect | Jane Kim | 2026-03-10 | 3 | 1/2 | 0/1 | Specialist Comments |
-| [ok] Recent | Ali Hassan | AFE - DE | John Smith | 2026-03-12 | 6 | 2/4 | 3/5 | Activity and Comments |
+| Status | Name | Group | Manager | Last Update | Days Until Needed |
+|--------|------|-------|---------|-------------|-------------------|
+| [!] Needed Now | Jane Doe | AFE - AI/ML | John Smith | 2026-02-15 | -19 |
+| [~] Needed Soon | Bob Lee | Architect | Jane Kim | 2026-03-10 | 3 |
+| [ok] Recent | Ali Hassan | AFE - DE | John Smith | 2026-03-12 | 6 |
 ```
 
 **Status formatting:**
@@ -159,8 +154,8 @@ If the user picks **"Group by manager"**, re-query and display grouped:
 ```
 ### Manager Name — X reports (Y need updates)
 
-| Status | Name | Group | Last Update | Days Until Needed | Comments (7d/14d) | Activities (7d/14d) |
-|--------|------|-------|-------------|-------------------|--------------------|---------------------|
+| Status | Name | Group | Last Update | Days Until Needed |
+|--------|------|-------|-------------|-------------------|
 ...
 ```
 
@@ -169,9 +164,10 @@ If the user picks **"Export as a list of names only"**, output a simple newline-
 ## Guardrails
 
 **DO:**
+- **Always filter out people managers** (`IS_PEOPLE_MANAGER = FALSE`) in all queries, totals, and lists — managers are excluded by default
 - Always sort Needed Now first (most urgent at top)
-- Show activity counts so managers can see engagement volume
-- Include the ACTIVE_REASON to explain what type of activity was recorded
+- Only show these columns in tables: Status, Name, Group, Manager, Last Update, Days Until Needed
+- Show activity counts and ACTIVE_REASON only if the user specifically asks for detail
 - When grouping by manager, show a count of how many reports need updates
 
 **DO NOT:**

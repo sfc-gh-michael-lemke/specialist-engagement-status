@@ -8,8 +8,10 @@ When triggered, the skill:
 
 1. Prompts for an update status filter: **Recent**, **Needed Soon**, **Needed Now**, or All
 2. Optionally narrows by specialist group, manager, or hierarchy
-3. Queries the `SALES_DEV.PUBLIC.Specialist_Engagement_Status` view
+3. Queries the `SALES_DEV.PUBLIC.Specialist_Engagement_Status_MAT` materialized table (refreshed every 30 min)
 4. Outputs a terminal markdown table sorted by urgency (Needed Now first)
+
+People managers are automatically excluded from all counts and lists.
 
 ## Update Status Classification
 
@@ -21,9 +23,11 @@ When triggered, the skill:
 
 ## Data Source
 
-**View:** `SALES_DEV.PUBLIC.Specialist_Engagement_Status`
+**Materialized Table:** `SALES_DEV.PUBLIC.Specialist_Engagement_Status_MAT`
 
-This view joins:
+Refreshed every 30 minutes by task `SALES_DEV.PUBLIC.Refresh_Specialist_Engagement_Status`.
+
+The underlying view `SALES_DEV.PUBLIC.Specialist_Engagement_Status` joins:
 - `SALES.SE_REPORTING.SE_HIERARCHY` — specialist names, managers, org hierarchy
 - `SIGMA_WRITEBACK.SALES.DIM_SE_SPECIALIST_METADATA` — specialist group
 - `FIVETRAN.SALESFORCE.VH_DELIVERABLE_HISTORY` — specialist comment timestamps
@@ -34,7 +38,7 @@ This view joins:
 ### Prerequisites
 
 - [Cortex Code CLI](https://docs.snowflake.com/en/user-guide/cortex-code/cortex-code) installed and authenticated
-- A Snowflake connection with read access to `SALES_DEV.PUBLIC.Specialist_Engagement_Status`
+- A Snowflake connection with read access to `SALES_DEV.PUBLIC.Specialist_Engagement_Status_MAT`
 
 ### Setup
 
